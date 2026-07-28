@@ -16,9 +16,9 @@ Section 8 of the historical suite reports an **independent third-party evaluatio
 
 | Artifact | Pin |
 |---|---|
-| Published runtime | `ghcr.io/jcartu/glm52-exl3-lora@sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338` |
+| Published runtime | `ghcr.io/jcartu/glm52-exl3-lora@sha256:3014c71c1d216b8c9fb53326f3c6ffaa993a8145567c4a3513dc6c645ec60e5b` |
 | Base runtime | `verdictai/glm52-exl3-sparkinfer@sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff` |
-| vLLM | `95d7914de19c56a21a1668f3b7273b5798424e47`, tag `exl3-lora-experts-r1` |
+| vLLM | `95d7914de1df93b39fe44957377311ddb752bd2f`, tag `exl3-lora-experts-r1` |
 | Sparkinfer | `fc8051efee755563e2c7a4ce87ce8b683db58381`, tag `exl3-lora-trellis-r1` |
 | Adapter contract | PEFT safetensors, BF16, rank 16, alpha 32, fully sharded TP4 |
 | Qualification adapter SHA-256 | `0c7c99940c7459a568441f2cd774c4c2ec0fe06be725e634497980f6fa2f6a5b` |
@@ -26,9 +26,14 @@ Section 8 of the historical suite reports an **independent third-party evaluatio
 The final image was rebuilt with named GitHub BuildKit contexts. The build log resolved the
 annotated source tags to the full commits above, compiled both installed Python trees, checked
 the staged Trellis and MLA projection APIs, exported OCI index
-`sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338`, and then passed an
-anonymous digest pull. The exact registry-tagged filesystem was started separately for the
-final smoke; adapter load returned 200 and 32/32 token log-probabilities changed.
+`sha256:3014c71c1d216b8c9fb53326f3c6ffaa993a8145567c4a3513dc6c645ec60e5b`, and then passed an
+anonymous registry inspection. Release r2 corrects the full vLLM revision recorded in the r1 OCI
+label; both releases resolve the same immutable source tag, and r2 is authoritative.
+
+The exact r2 digest was pulled and started on the four-GPU qualification machine. Runtime
+inspection reported the corrected vLLM and Sparkinfer labels; `/health` became ready; the model
+list exposed both the base and `macaron-l2` IDs; base and adapted completion requests succeeded;
+and adapter unload plus warm reload both returned success.
 
 ### Source gates
 

@@ -1,11 +1,29 @@
 # Changelog (runtime image lineage)
 
+## v31-lora-r2 — 2026-07-28 (`sha256:3014c71c1d21…`)
+- Corrects the full vLLM source revision recorded in the r1 OCI metadata and documentation.
+  The immutable `exl3-lora-experts-r1` tag resolves to
+  `95d7914de1df93b39fe44957377311ddb752bd2f`; the Sparkinfer source remains
+  `fc8051efee755563e2c7a4ce87ce8b683db58381`.
+- Publishes the authoritative corrected image at
+  `ghcr.io/jcartu/glm52-exl3-lora@sha256:3014c71c1d216b8c9fb53326f3c6ffaa993a8145567c4a3513dc6c645ec60e5b`.
+- Exact-image smoke on 4× RTX PRO 6000 Blackwell passed: corrected OCI labels inspected,
+  health ready, base and adapter completions succeeded, and dynamic unload plus warm reload
+  both succeeded.
+- Replaces the project landing page with a plain-language guide covering purpose, audience,
+  architecture, setup, evidence, limits, and rollback, and adds layered contributor and license
+  attribution in `CREDITS.md`.
+- The source tag and implementation are unchanged from r1; r2 supersedes r1 because its complete
+  provenance label is accurate.
+
 ## v31-lora-r1 — 2026-07-28 (`sha256:7af67ad8dd74…`)
 - Adds dynamically loaded, fully sharded **BF16 rank-16 LoRA** execution for all five absorbed
   MLA attention targets and EXL3 routed-expert gate/up/down projections.
-- Pins vLLM `95d7914de19c56a21a1668f3b7273b5798424e47`
+- Uses vLLM `95d7914de1df93b39fe44957377311ddb752bd2f`
   (`exl3-lora-experts-r1`) and Sparkinfer
   `fc8051efee755563e2c7a4ce87ce8b683db58381` (`exl3-lora-trellis-r1`) on the v31 base.
+- Release r1 recorded an incorrect expanded vLLM revision in its OCI metadata and is superseded
+  by r2. The immutable source tag itself was correct.
 - Publishes
   `ghcr.io/jcartu/glm52-exl3-lora@sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338`;
   the registry image was rebuilt from the two GitHub tags and anonymously pulled by digest.

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-export IMAGE="${IMAGE:-ghcr.io/jcartu/glm52-exl3-lora@sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338}"
+export IMAGE="${IMAGE:-ghcr.io/jcartu/glm52-exl3-lora@sha256:3014c71c1d216b8c9fb53326f3c6ffaa993a8145567c4a3513dc6c645ec60e5b}"
 export MODEL_DIR="${MODEL_DIR:-$SCRIPT_DIR/model}"
 export ADAPTER_DIR="${ADAPTER_DIR:-$SCRIPT_DIR/adapter}"
 export CACHE_DIR="${CACHE_DIR:-$HOME/.cache/glm52-exl3-lora-v31}"
