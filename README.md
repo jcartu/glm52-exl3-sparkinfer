@@ -1,168 +1,195 @@
 # GLM-5.2 EXL3-TR3 — production serving stack for SM120
 
 Production-grade serving of **GLM-5.2 (753B MoE)** quantized to **EXL3 Trellis 3.0 bpw** with a
-rank-sliced **EXL3 MTP-78 draft head**, on 4× NVIDIA RTX PRO 6000 Blackwell (SM120, 96 GB,
-PCIe — no NVLink). TP4 / DCP4, `nvfp4_ds_mla` 4-bit KV cache, MTP-3 speculative decoding.
+rank-sliced **EXL3 MTP-78 draft head** and dynamically loaded, fully sharded **BF16 rank-16
+LoRA adapters**, on 4× NVIDIA RTX PRO 6000 Blackwell (SM120, 96 GB, PCIe — no NVLink).
 
-**Context geometry** (three different numbers — don't conflate them):
-- **Model-native window: 1,048,576 tokens** (visible at boot: `Overriding draft model max model
-  len from 1048576 to 524288`).
-- **Shipped per-request cap: 524,288** (`--max-model-len`) — a deliberate choice so the KV pool
-  holds ~2 full-length requests concurrently. Raise it toward 1M only if single-stream is
-  acceptable: the pool itself is the binding limit.
-- **Measured KV pool (`nvfp4_ds_mla`, util 0.96, tr3 MTP-78 head): 959,744–1,132,544 tokens**
-  across boots (1.83×–2.16× concurrency at 524,288). The exact figure depends on what else is
-  resident on the GPUs when vLLM profiles; read yours from the boot line
-  `GPU KV cache size: N tokens`. The tr3 draft head is what buys this pool — roughly +66% KV
-  versus the BF16 head.
+The qualified default is TP4 / DCP4, `nvfp4_ds_mla` KV, MTP-3 greedy speculative decoding,
+FULL_AND_PIECEWISE CUDA graphs, a 32,768-token request cap, and two active sequences. These
+limits are deliberate: the adapter-resident model uses about 93.2 GiB per GPU.
 
-Everything here is **reproducibly pinned**: the runtime image by registry digest, its base by
-digest, and the EXL3 source layer by the two upstream PRs it is built from.
+**Qualified context geometry**:
+- The underlying checkpoint advertises a 1,048,576-token native window.
+- The dynamic-LoRA preset ships at **32,768 tokens** and `--max-num-seqs 2`.
+- The measured KV pool is **252,928 tokens** (2.45 GiB per rank; vLLM reports 7.71875×
+  theoretical 32k concurrency before the explicit two-sequence scheduler cap).
+- A **30,553-token adapted prompt** plus decode completed successfully in the release
+  qualification, covering 93.24% of the shipped request cap.
+
+The adapter contract is intentionally narrow and explicit: Hugging Face PEFT safetensors,
+`torch.bfloat16`, rank 16, fully sharded across TP4, one resident adapter, loaded and unloaded
+through vLLM's runtime LoRA endpoints. The image, base, and both source trees are reproducibly
+pinned.
 
 | Artifact | Pin |
 |---|---|
-| Runtime image | `verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a` |
-| Image digest | `sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff` |
-| Common base (GG/SparkInfer v20) | `voipmonitor/vllm:gilded-gnosis-v20-vllm0c79e41-sic3828fd-fi801d57a-cu132-20260727` @ `sha256:131481b0f12c455a8fbad72c5909eb3a2c3accd96815743fdcfa134396e548c0` |
-| Model weights | [brandonmusic/GLM-5.2-EXL3-TR3-3.0bpw](https://huggingface.co/brandonmusic/GLM-5.2-EXL3-TR3-3.0bpw) (includes the tr3 MTP layer-78 head) |
-| EXL3 vLLM backend | [local-inference-lab/vllm #139](https://github.com/local-inference-lab/vllm/pull/139) |
-| EXL3 fused-MoE kernels | [local-inference-lab/sparkinfer #49](https://github.com/local-inference-lab/sparkinfer/pull/49) |
+| Runtime image | `ghcr.io/jcartu/glm52-exl3-lora@sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338` |
+| Common base | `verdictai/glm52-exl3-sparkinfer@sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff` |
+| vLLM source | [`95d7914de19c56a21a1668f3b7273b5798424e47`](https://github.com/jcartu/vllm/commit/95d7914de19c56a21a1668f3b7273b5798424e47), tag `exl3-lora-experts-r1` |
+| Sparkinfer source | [`fc8051efee755563e2c7a4ce87ce8b683db58381`](https://github.com/jcartu/sparkinfer/commit/fc8051efee755563e2c7a4ce87ce8b683db58381), tag `exl3-lora-trellis-r1` |
+| Model weights | [brandonmusic/GLM-5.2-EXL3-TR3-3.0bpw](https://huggingface.co/brandonmusic/GLM-5.2-EXL3-TR3-3.0bpw) |
+| Qualification adapter | BF16 rank 16, alpha 32; safetensors SHA-256 `0c7c99940c7459a568441f2cd774c4c2ec0fe06be725e634497980f6fa2f6a5b` |
 
 ## Quickstart
 
 ```bash
-# 1. weights (~316 GB)
-huggingface-cli download brandonmusic/GLM-5.2-EXL3-TR3-3.0bpw --local-dir ./GLM-5.2-EXL3-TR3-3.0bpw
+# 1. Download the model and obtain a compatible BF16 rank-16 PEFT adapter.
+huggingface-cli download brandonmusic/GLM-5.2-EXL3-TR3-3.0bpw \
+  --local-dir ./GLM-5.2-EXL3-TR3-3.0bpw
 
-# 2. serve (compose picks up the digest-pinned image)
+# 2. Start the digest-pinned runtime.
 cd deploy
-MODEL_DIR=$(realpath ../GLM-5.2-EXL3-TR3-3.0bpw) ./server.sh
+export MODEL_DIR="$(realpath ../GLM-5.2-EXL3-TR3-3.0bpw)"
+export ADAPTER_DIR="$(realpath /path/to/rank16-adapter)"
+export CACHE_DIR="${HOME}/.cache/glm52-exl3-lora-v31"
+./server.sh start
 
-# 3. verify
-curl -s localhost:9200/v1/models | jq .
+# 3. After /health is ready, register the mounted adapter dynamically.
+LORA_NAME=my-adapter ./server.sh load
+curl -fsS http://127.0.0.1:8000/v1/models | jq .
 ```
 
-The OpenAI-compatible endpoint (chat, tools, streaming, reasoning split via the `glm45`
-parser) comes up on `:9200`. First boot compiles kernels (~2 min extra); later boots hit the
-compile cache.
+The OpenAI-compatible completion and chat endpoints come up on `:8000`. The model load and
+graph capture take several minutes on a cold cache. The first adapter registration measured
+27.5 seconds; unloading measured 2 ms and a warm reload measured 8.0 seconds.
 
-As of **v29 no environment workarounds are required** — in particular you do **not** need
-`VLLM_EXL3_TRELLIS_MIN_M=1` anymore. The backend stamps each MoE layer's draft/target role at
-construction and widens the draft Trellis window itself (fixes the
-[boot failure](https://github.com/local-inference-lab/vllm/issues/183) where CUDA-graph capture
-of the MTP draft died with *"eager parity path entered during CUDA graph capture (m=3)"*).
+The preset encodes two runtime requirements found during GPU qualification:
+`VLLM_PCIE_ALLREDUCE_BACKEND=b12x` and `VLLM_DISABLE_SHARED_EXPERTS_STREAM=1`. B12X PCIe
+oneshot channels are stream-affine; overriding the latter reintroduces a CUDA-graph failure.
 
 ## What's validated
 
-Full methodology and raw numbers: [`docs/RELEASE_TEST_SUITE.md`](docs/RELEASE_TEST_SUITE.md).
-Headlines, measured on this image lineage on 4× RTX PRO 6000 (power-capped 300 W) — the correctness results were taken on v29; v30's only delta is env-knob registration plus a dormant PR#79 module (boot/tool gates re-run on the v30 digest):
+Full evidence and exact measurements: [`docs/RELEASE_TEST_SUITE.md`](docs/RELEASE_TEST_SUITE.md).
+All rows below were exercised on 4× RTX PRO 6000 with the published image filesystem.
 
 | Check | Result |
 |---|---|
-| Needle-in-a-haystack, `nvfp4_ds_mla` KV | **24/24** — depths 0.1/0.5/0.9 at 8k→480k targets, up to **479,396 real prompt tokens** |
-| Needle-in-a-haystack, `fp8` KV (same everything else) | **18/18** to 479,395 tokens |
-| Boot with `VLLM_EXL3_TRELLIS_MIN_M` unset | **PASS** (pre-v29: guaranteed startup failure) |
-| Tool calling — non-streaming (auto / required / round-trip / negative) | **4/4** |
-| Tool calling — streaming deltas (`glm47` parser) | **PASS**, no content leakage |
-| Fused Trellis MoE at m=1,2,3 (NaN-poisoned arena, production tile geometry) | **bitwise-correct**, 0 FAIL / 27 |
-| CUDA-graph capture + replay below plan capacity (m ∈ {1,2,3} vs cap 32) | **bit-for-bit vs eager**, stable across replays |
-| KV pool at `util 0.96` (tr3 MTP-78 head) | **959,744 / 998,400 / 1,132,544 tokens** measured across boots (busy → clear → idle GPUs); 1.83×–2.16× at 524,288 |
+| Remote reproducible build | GitHub tags resolved to vLLM `95d7914…` and Sparkinfer `fc8051e…`; image published and anonymously pulled by digest |
+| Source validation | vLLM focused LoRA `109 passed`; CPU MLA `22 passed`; EXL3 bridge/device `14 passed`; Sparkinfer GPU suite `29 passed` |
+| Shipped API harness | health, greedy chat, four tool-call scenarios, and streaming deltas: **ALL PASS** for base and adapter |
+| Dynamic lifecycle | load `200` in 27.516 s; unload `200` in 0.002 s; warm reload `200` in 7.974 s |
+| Adapter effect | 32/32 shared token log-probabilities changed; exact release-image smoke max delta `0.5778587` |
+| Base isolation | base text and token log-probabilities remained bit-for-bit identical across adapter registration and unload |
+| CUDA graphs + mixed routing | base and adapter requests passed concurrently under FULL_AND_PIECEWISE graphs |
+| DCP4 + MTP-3 | B12X world-size-4 collectives captured and served; 1,599 / 1,839 draft tokens accepted (**86.95%**) |
+| Prefix cache | 3,265-token base request `7.503 → 0.649 s` (11.57×); adapter `3.906 → 0.868 s` (4.50×) |
+| Near-capacity context | adapted 30,553-token prompt completed in 18.795 s |
+| Warm decode | base **84.36 tok/s**; adapter **62.76 tok/s**; mixed concurrency-2 **97.83 aggregate tok/s** |
+| Deterministic quality gates | factual, arithmetic, Python expression, and exact-format instruction: **4/4 base and 4/4 adapter** |
+| Retrieval at shipped capacity | **9/9 base + 9/9 adapter** at 8k, 16k, and 30k prompt targets × depths 0.1/0.5/0.9 |
 
-Independent evaluation: [`docs/independent-eval/ORIGINAL_REPORT.md`](docs/independent-eval/ORIGINAL_REPORT.md).
-Benchmark session logs: [`docs/benchmarks/`](docs/benchmarks/).
+The older long-context and independent quality studies remain available as historical baseline
+evidence in [`docs/benchmarks/`](docs/benchmarks/) and
+[`docs/independent-eval/`](docs/independent-eval/); they used the pre-LoRA image lineage and
+different capacity presets.
 
 ## Repository layout
 
-```
+```text
 deploy/                  ready-to-run serving
-  docker-compose.yml       TP4/DCP4 production config (digest-pinned image)
-  docker-compose-dcp1.yml  DCP1 variant: faster prefill (+~40% at 64–128k), ~3.4× smaller KV pool
-  server.sh                convenience launcher (env-overridable)
-build/                   how the image is made
-  Dockerfile               thin overlay on the pinned GG/SparkInfer v20 base
-  overlay/                 13 vLLM runtime files = base files + EXL3 edits (source: PR #139)
-  glm52_nvfp4_mla_outer_scales.json  calibrated MLA outer scales for the nvfp4 KV cache
-  extract_assets.sh        recover prebuilt binaries (exllamav3 ext, ABI shim, wheel)
-                           from the published image — keeps this repo source-only
-tests/                   the validation harnesses used for the results above
-  needle_haystack_test.py  long-context needle probe (depths × context sweep)
-  tool_call_test.py        4-scenario OpenAI tools test
-  tool_call_stream_test.py streaming tool-call delta test
-  validate.sh              one-shot smoke: health → inference → tools
-docs/                    published results
-  RELEASE_TEST_SUITE.md    full test-suite results (KLD, decode/prefill, needle, boot gates)
-  independent-eval/        third-party evaluation report
+  docker-compose.yml       qualified TP4/DCP4/MTP-3 dynamic-LoRA preset
+  docker-compose-dcp1.yml  qualified TP4/DCP1 graph fallback; MTP disabled
+  server.sh                lifecycle plus dynamic load/unload commands
+build/
+  Dockerfile               digest-pinned base plus immutable Git source contexts
+  overlay/                 historical pre-merge source snapshot; not copied by the current build
+tests/                   baseline health, generation, tools, and retrieval harnesses
+docs/
+  RELEASE_TEST_SUITE.md    current LoRA qualification plus historical full-suite evidence
+  independent-eval/        third-party pre-LoRA evaluation report
   benchmarks/              dated benchmark sessions
 ```
 
-## DCP4 vs DCP1 — pick your trade
+## Qualified presets
 
-Measured on this checkpoint (same image family, 300 W caps):
-
-| | DCP4 (default, measured on v29) | DCP1 (measured on v26) |
+| | DCP4 default | DCP1 fallback |
 |---|---|---|
-| Prefill 8k / 64k / 128k (tok/s) | 2,341 / 1,755 / 1,657 | **2,597 / 2,421 / 2,304** |
-| KV pool (measured) | **959,744–1,132,544 tokens** | 293,760 tokens |
-| Per-request cap | 524,288 shipped (model native 1,048,576) | ~262 k practical (vLLM's own DCP1 estimate: 294,976 ceiling) |
+| Decode context parallelism | 4 | 1 |
+| MTP | 3 greedy | disabled |
+| GPU memory utilization | 0.93 | 0.90 |
+| CUDA graph sizes | 4, 8 | 1, 2, 4, 8 |
+| Max model length / sequences | 32,768 / 2 | 32,768 / 2 |
+| Dynamic BF16 rank-16 LoRA | qualified | qualified |
 
-DCP shards the KV cache across ranks (capacity) at the cost of prefill collectives (speed).
-With the v20-final DCP prefill auto-policy in the base, DCP4's long-context prefill gap versus
-DCP1 has narrowed to roughly +11% (8k) / +38–39% (64–128k) in DCP1's favor — no longer the ~2×
-seen on older bases. The two columns are one image generation apart (v29 vs v26), so treat the
-residual gap as indicative. Prefill-dominated workloads that fit in ~260k context may still
-prefer `deploy/docker-compose-dcp1.yml`; everyone else should stay on DCP4 for the ~3.4× KV
-pool. Full session data: [`docs/benchmarks/2026-07-27-v29-decode-prefill.md`](docs/benchmarks/2026-07-27-v29-decode-prefill.md)
-(raw [decode log](docs/benchmarks/2026-07-27/decode-c1-c32-ctx0-32k.log) /
-[prefill log](docs/benchmarks/2026-07-27/prefill-v29-dcp4.log) + JSON in
-[`docs/benchmarks/2026-07-27/`](docs/benchmarks/2026-07-27/)).
+Use DCP4 for the released MTP/prefix-cache path. The DCP1 file is a conservative graph fallback
+matching the separately qualified MTP-off topology; enabling MTP in that file is possible but
+was not part of this release gate. Historical high-capacity DCP4/DCP1 measurements in
+[`docs/benchmarks/`](docs/benchmarks/) used older images without the 14.3 GB adapter and must not
+be treated as capacity claims for this preset.
 
 ## Building the image yourself
 
-The image is a **thin overlay** — no source compile:
+The image overlays the exact Python packages from the two published source tags while retaining
+the base image's ABI-matched native modules:
 
 ```bash
-cd build
-./extract_assets.sh          # pulls the 3 prebuilt binaries out of the published image
-docker build -t glm52-exl3-sparkinfer:local .
+docker buildx build --load \
+  --file build/Dockerfile \
+  --build-context vllm-src=https://github.com/jcartu/vllm.git#exl3-lora-experts-r1 \
+  --build-context sparkinfer-src=https://github.com/jcartu/sparkinfer.git#exl3-lora-trellis-r1 \
+  --build-arg VLLM_COMMIT=95d7914de19c56a21a1668f3b7273b5798424e47 \
+  --build-arg SPARKINFER_COMMIT=fc8051efee755563e2c7a4ce87ce8b683db58381 \
+  --tag glm52-exl3-lora:v31 .
 ```
 
-`overlay/` mirrors the EXL3 source layer exactly as proposed upstream in
-[vllm #139](https://github.com/local-inference-lab/vllm/pull/139); the SparkInfer wheel is built
-from [sparkinfer #49](https://github.com/local-inference-lab/sparkinfer/pull/49)
-(`pip wheel --no-deps .` on the PR branch). When those PRs merge, the overlay shrinks to nothing
-and this repo becomes deploy-and-docs only.
+The build fails unless both source pins are supplied and verifies the staged Trellis API, MLA
+LoRA projection API, native runtime assets, and Python bytecode compilation before exporting.
+The release build log resolved both annotated tags to the full commits shown above.
 
-**Topology note for contributors:** the two PRs target their repos' own base branches; the
-*image* pins the v20 integration base by digest. Don't rebase one onto the other — the pins are
-not ancestors of the PR bases (that mistake temporarily bloated #139 by ~30 foreign commits
-before being caught).
-
-## Running the validation suite
+## Running validation
 
 ```bash
-tests/validate.sh                    # health + greedy inference + tools (non-stream & stream)
-python3 tests/needle_haystack_test.py --contexts 8000,65000,128000 --depths 0.1,0.5,0.9
+bash -n deploy/server.sh
+MODEL_DIR=/path/to/model ADAPTER_DIR=/path/to/adapter CACHE_DIR=/tmp/cache \
+  docker compose -f deploy/docker-compose.yml config --quiet
+
+cd deploy
+MODEL_DIR=/path/to/model ADAPTER_DIR=/path/to/adapter ./server.sh start
+LORA_NAME=my-adapter ./server.sh load
+LORA_NAME=my-adapter ./server.sh status
+LORA_NAME=my-adapter ./server.sh unload
 ```
 
-The needle harness plants a unique code at fractional depths in filler text and retrieves it
-greedily — misses or garbled output at long context with short-context passes is the corruption
-signature it exists to catch. Run it against any config change before trusting the change.
+The baseline harnesses under `tests/` remain useful for health, generation, tool calling, and
+retrieval regression checks. Dynamic-LoRA release evidence is recorded in the test-suite
+addendum because it requires the qualified adapter artifact and four SM120 GPUs.
 
 ## Known limitations
 
-- `--max-num-seqs 8` in the shipped compose: >8 concurrent clients queue (raise it if your KV
-  budget allows).
-- SM120 has no TMEM/TCGEN05/WGMMA: sparse-MLA kernel families that require them (FlashMLA-sparse
-  etc.) are unavailable; this stack's `B12X_MLA_SPARSE` backend + `nvfp4_ds_mla`/`fp8`/`bf16` KV
-  is the working path.
-- Startup logs still warn `Unknown vLLM environment variable` for 8 base-runtime knobs;
-  cosmetic (the consuming code reads the environment directly). The nine EXL3-owned knobs are
-  registered in-image as of v30 (PR #139 commit `00787eea`), dropping the warning count 15 → 8.
-  Side effect: those knobs are torch.compile cache-key factors — changing one costs a one-time
-  ~70 s recompile on next boot.
-- fp8 KV works on SM120 in this stack (18/18 needle above) — ignore older notes claiming
-  otherwise; nvfp4 remains the default for the ~2× larger pool at equal quality
-  (KLD delta ≈ 0.015, see the test suite).
+- The shipped scheduler cap is two active sequences and the request cap is 32,768 tokens.
+  Raising either changes the measured memory and graph contract and requires requalification.
+- One BF16 rank-16 adapter is supported at a time. Unload it before replacing files or loading a
+  different adapter; 3D LoRA weights were not qualified.
+- Adapter decode was **62.76 tok/s** versus **84.36 tok/s** base in the measured 128-token
+  sequence workload. This release makes no universal performance-improvement claim.
+- The base image repeatedly logs an optional FlashAttention-2 ABI probe error
+  (`_vllm_fa2_C.abi3.so` undefined symbol). The selected backend is `B12X_MLA_SPARSE`; graph
+  capture and serving succeed, so this is known startup noise rather than the active path.
+- First use of previously unseen prefill/LoRA shapes can emit JIT-monitor warnings and incur a
+  latency spike. Keep the compilation cache mounted and warm representative shapes before
+  latency-sensitive traffic.
+- B12X PCIe oneshot all-reduce is stream-affine. Do not override
+  `VLLM_DISABLE_SHARED_EXPERTS_STREAM=1` in the qualified graph preset.
+- SM120 lacks the TMEM/TCGEN05/WGMMA features required by some sparse-MLA families; the released
+  `B12X_MLA_SPARSE` plus `nvfp4_ds_mla` path is the qualified implementation.
+
+## Rollback
+
+Stop the release compose project, then restart a previously retained image or container:
+
+```bash
+cd deploy
+./server.sh stop
+
+# Qualification-host rollback retained during release:
+docker start glm52-exl3-v26-5001
+```
+
+The retained host container is `e08c3601feed…`, backed by local image
+`sha256:d55205e3ae3d81f00a2770dee91c2bf1662a5efe29c6c897be5ac3010ca75895`.
+For a portable rollback, set `IMAGE` to any prior digest-pinned runtime and run `server.sh
+start` with the same `MODEL_DIR`, `ADAPTER_DIR`, and `CACHE_DIR`. Do not delete the retained
+container until the new release completes its burn-in window.
 
 ## Contributing
 

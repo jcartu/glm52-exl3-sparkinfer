@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot smoke validation of a running endpoint: health -> greedy inference -> tool calls.
 set -uo pipefail
-PORT="${PORT:-9200}"; MODEL="${MODEL:-GLM-5.2-EXL3-TR3-3.0bpw}"; H="http://127.0.0.1:$PORT"
+export PORT="${PORT:-8000}"; export MODEL="${MODEL:-GLM-5.2-EXL3-TR3-3.0bpw}"; H="http://127.0.0.1:$PORT"
 fail=0
 step(){ printf '%-42s' "$1"; }
 

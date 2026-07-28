@@ -11,7 +11,7 @@ Plants a unique fact at several depths in a long filler document, then asks for
 it back with greedy decoding. A miss at long context with hits at short context
 is the corruption signature described in the issue.
 """
-import argparse, json, random, sys, time
+import argparse, json, os, random, sys, time
 import urllib.request
 
 FILLER = (
@@ -50,9 +50,9 @@ def ask(url, model, prompt, max_tokens=None, timeout=1800):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://127.0.0.1:9200/v1/chat/completions")
-    ap.add_argument("--model", default="GLM-5.2-EXL3-TR3-3.0bpw")
-    ap.add_argument("--contexts", default="8000,32000,65000,128000")
+    ap.add_argument("--url", default=f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/v1/chat/completions")
+    ap.add_argument("--model", default=os.environ.get("MODEL", "GLM-5.2-EXL3-TR3-3.0bpw"))
+    ap.add_argument("--contexts", default="8000,16000,30000")
     ap.add_argument("--depths", default="0.1,0.5,0.9")
     ap.add_argument("--out", default="")
     a = ap.parse_args()

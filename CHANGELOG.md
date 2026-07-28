@@ -1,5 +1,25 @@
 # Changelog (runtime image lineage)
 
+## v31-lora-r1 — 2026-07-28 (`sha256:7af67ad8dd74…`)
+- Adds dynamically loaded, fully sharded **BF16 rank-16 LoRA** execution for all five absorbed
+  MLA attention targets and EXL3 routed-expert gate/up/down projections.
+- Pins vLLM `95d7914de19c56a21a1668f3b7273b5798424e47`
+  (`exl3-lora-experts-r1`) and Sparkinfer
+  `fc8051efee755563e2c7a4ce87ce8b683db58381` (`exl3-lora-trellis-r1`) on the v31 base.
+- Publishes
+  `ghcr.io/jcartu/glm52-exl3-lora@sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338`;
+  the registry image was rebuilt from the two GitHub tags and anonymously pulled by digest.
+- Replaces machine-specific deployment paths with explicit model/adapter/cache inputs and ships
+  the qualified TP4/DCP4/MTP-3 graph preset: util 0.93, max length 32,768, max sequences 2,
+  dynamic runtime updates, one BF16 rank-16 adapter.
+- Qualification: dynamic load/unload/reload PASS; graph mixed-routing PASS; DCP prefix cache
+  PASS; MTP accepted 1,599/1,839 draft tokens; 30,553-token adapted context PASS; deterministic
+  base/adapter quality gates 4/4 each; shipped health/greedy/tools/streaming harness ALL PASS for
+  both model IDs; retrieval 9/9 base and 9/9 adapter through 30k prompts.
+- Requires B12X PCIe all-reduce with the shared-expert auxiliary stream disabled. The optional
+  FA2 ABI probe still logs known startup errors, but the selected B12X sparse-MLA path captures
+  and serves successfully.
+
 ## v29 — 2026-07-27 (`sha256:2996b8ac37ff…`)
 - **Boots with no env workarounds.** Draft/target role stamped at construction
   (`runner_type == "draft"`); draft layers auto-widen the Trellis window to

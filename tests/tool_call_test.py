@@ -1,6 +1,7 @@
-import json, urllib.request, sys
+import json, os, urllib.request, sys
 
-URL="http://127.0.0.1:9200/v1/chat/completions"
+URL=f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/v1/chat/completions"
+MODEL=os.environ.get("MODEL", "GLM-5.2-EXL3-TR3-3.0bpw")
 TOOLS=[{"type":"function","function":{
   "name":"get_case_status",
   "description":"Look up the current status of a Kentucky court case by case number.",
@@ -16,7 +17,7 @@ TOOLS=[{"type":"function","function":{
     "required":["trigger_date","days"]}}}]
 
 def ask(messages, tools=None, tool_choice=None, max_tokens=4096):
-    body={"model":"GLM-5.2-EXL3-TR3-3.0bpw","messages":messages,"temperature":0,"max_tokens":max_tokens}
+    body={"model":MODEL,"messages":messages,"temperature":0,"max_tokens":max_tokens}
     if tools: body["tools"]=tools
     if tool_choice: body["tool_choice"]=tool_choice
     req=urllib.request.Request(URL,method="POST",headers={"Content-Type":"application/json"},data=json.dumps(body).encode())

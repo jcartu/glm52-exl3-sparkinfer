@@ -1,8 +1,9 @@
-import json, urllib.request
-URL="http://127.0.0.1:9200/v1/chat/completions"
+import json, os, urllib.request
+URL=f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/v1/chat/completions"
+MODEL=os.environ.get("MODEL", "GLM-5.2-EXL3-TR3-3.0bpw")
 TOOLS=[{"type":"function","function":{"name":"read_file","description":"Read a file",
   "parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]
-body={"model":"GLM-5.2-EXL3-TR3-3.0bpw","temperature":0,"stream":True,
+body={"model":MODEL,"temperature":0,"stream":True,
   "tools":TOOLS,
   "messages":[{"role":"user","content":"Read the file README.md using the tool."}]}
 req=urllib.request.Request(URL,method="POST",headers={"Content-Type":"application/json"},data=json.dumps(body).encode())

@@ -1,12 +1,161 @@
 # Release Test Suite — GLM-5.2-EXL3-TR3-3.0bpw
 
-Measured 2026-07-25 on 4x RTX PRO 6000 Blackwell 96 GB
-(TP4/DCP4, MTP-3 greedy) with the **published sha-pinned image** and the **shipped
-`server.sh` / `docker-compose.yml` preset**, using `llm_decode_bench.py` with the same flags as
-`run_release_benchmarks.sh`. Every raw benchmark log is embedded verbatim beneath its table.
+The current dynamic-LoRA release addendum was measured 2026-07-28 on 4× RTX PRO 6000
+Blackwell 96 GB. Sections after the addendum preserve the 2026-07-25 pre-LoRA image-lineage
+suite and its embedded raw benchmark logs; those older capacity/performance results are not
+claims about the adapter-resident preset.
 
-Section 8 reports an **independent third-party evaluation** run by
+Section 8 of the historical suite reports an **independent third-party evaluation** run by
 [malaiwah/glm52-exl3-vast](https://github.com/malaiwah/glm52-exl3-vast/tree/main).
+
+---
+
+## 2026-07-28 addendum — dynamic BF16 rank-16 LoRA release
+
+### Immutable inputs
+
+| Artifact | Pin |
+|---|---|
+| Published runtime | `ghcr.io/jcartu/glm52-exl3-lora@sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338` |
+| Base runtime | `verdictai/glm52-exl3-sparkinfer@sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff` |
+| vLLM | `95d7914de19c56a21a1668f3b7273b5798424e47`, tag `exl3-lora-experts-r1` |
+| Sparkinfer | `fc8051efee755563e2c7a4ce87ce8b683db58381`, tag `exl3-lora-trellis-r1` |
+| Adapter contract | PEFT safetensors, BF16, rank 16, alpha 32, fully sharded TP4 |
+| Qualification adapter SHA-256 | `0c7c99940c7459a568441f2cd774c4c2ec0fe06be725e634497980f6fa2f6a5b` |
+
+The final image was rebuilt with named GitHub BuildKit contexts. The build log resolved the
+annotated source tags to the full commits above, compiled both installed Python trees, checked
+the staged Trellis and MLA projection APIs, exported OCI index
+`sha256:7af67ad8dd7406f0a4de8ac68be872d24697a4191ba9b23c44db1d265cc9c338`, and then passed an
+anonymous digest pull. The exact registry-tagged filesystem was started separately for the
+final smoke; adapter load returned 200 and 32/32 token log-probabilities changed.
+
+### Source gates
+
+| Gate | Result |
+|---|---|
+| vLLM focused LoRA suite | `109 passed` |
+| CPU MLA regression selection | `22 passed, 2314 deselected` |
+| EXL3 device and modular bridge | `14 passed` |
+| Sparkinfer pinned GPU suite | `29 passed, 1 warning` |
+| Ruff / bytecode compilation | PASS in both source trees |
+| No-adapter monolithic parity | SHA-256 `5560efedbb5abedc6c44c9d37e2e439536b621c75d4f1c96a127bf049714065d` |
+
+The real layer-10/expert-0 factor oracle observed finite, nonzero BF16 rank-16 factors:
+
+| Projection | A shape | B shape | B norm | SHA prefix |
+|---|---:|---:|---:|---|
+| gate | 16×6144 | 2048×16 | 0.070327 | `1e28…` |
+| up | 16×6144 | 2048×16 | 0.0837356 | `a243…` |
+| down | 16×2048 | 6144×16 | 0.158349 | `7589…` |
+
+### Qualified serving contract
+
+| Setting | Value |
+|---|---|
+| GPUs / topology | 4× RTX PRO 6000, TP4, DCP4 A2A |
+| KV / attention / MoE | `nvfp4_ds_mla` / `B12X_MLA_SPARSE` / `b12x` |
+| Speculation | MTP-3, greedy draft sampling |
+| Graphs | FULL_AND_PIECEWISE, capture sizes 4 and 8 |
+| Scheduler | max model length 32,768; max sequences 2; max batched tokens 3,072 |
+| Memory | utilization 0.93; model load 81.34 GiB/rank; actual graph pool 0.14 GiB |
+| KV capacity | 2.45 GiB/rank, 252,928 tokens |
+| LoRA | dynamic updates, BF16, max rank 16, fully sharded, max adapters 1 |
+| PCIe all-reduce | B12X; shared-expert auxiliary stream disabled |
+
+At utilization 0.90, DCP4+MTP-3 correctly failed before serving because available KV memory was
+`-0.67 GiB`; this was capacity, not a source error. At 0.93 the same topology captured all
+graphs and exposed 252,928 KV tokens. B12X all-reduce with the shared-expert auxiliary stream
+enabled failed with `PCIe oneshot allreduce channels are stream-affine`; the released preset
+therefore fixes `VLLM_DISABLE_SHARED_EXPERTS_STREAM=1`. The CPP alternative was also rejected
+after an invalid-argument failure during graph capture.
+
+### Dynamic lifecycle and routing
+
+| Check | Observed result |
+|---|---|
+| First dynamic load | HTTP 200, 27.478 s in the full qualification; 27.516 s on the exact release filesystem |
+| Base request | HTTP 200 under DCP4/MTP-3/graphs |
+| Adapted request | HTTP 200; 32/32 shared token log-probabilities changed |
+| Exact release-image max log-probability delta | 0.5778586865 |
+| Mixed concurrency-2 base + adapter | both HTTP 200, 2.155 s for 64-token requests |
+| Unload | HTTP 200, 0.002 s |
+| Base after unload | text and all token log-probabilities bit-for-bit equal to pre-unload base |
+| Warm reload | HTTP 200, 7.974 s; adapted request passed |
+
+This isolation check is important: adapter-aware prefix/graph metadata must not let base requests
+reuse adapted KV or routed-expert state. Exact base equality before and after unload is the
+observable gate.
+
+### Prefix cache, MTP, capacity, and performance
+
+| Workload | Result |
+|---|---|
+| 3,265-token base prefix, cold → repeat | 7.503 → 0.649 s (**11.57×**) |
+| 3,265-token adapted prefix, cold → repeat | 3.906 → 0.868 s (**4.50×**) |
+| MTP totals after qualification | 613 drafts, 1,839 draft tokens, 1,599 accepted (**86.95%**) |
+| Warm 128-token base decode, 3 runs | 1.473 / 1.540 / 1.538 s; **84.36 tok/s** aggregate |
+| Warm 128-token adapter decode, 3 runs | 2.037 / 2.050 / 2.031 s; **62.76 tok/s** aggregate |
+| Mixed base+adapter concurrency 2 | 256 tokens / 2.617 s; **97.83 aggregate tok/s** |
+| Adapted long context | 5,332 prompt + 128 completion tokens in 4.716 s |
+| Adapted near-cap request | 30,553 prompt tokens (93.24% of cap), completed in 18.795 s |
+| GPU footprint with adapter resident | 93,215–93,255 MiB used; 4,034–4,074 MiB free per GPU |
+
+The prefix-cache total at the end of all cold stress cases was 10,752 hits / 62,115 queried
+tokens; dedicated identical-prefix pairs above are the meaningful cache-speed gates. The
+near-cap response content was not used as a quality score—only successful memory-safe execution
+was asserted.
+
+### Deterministic quality gates
+
+Chat requests used `chat_template_kwargs={"enable_thinking": false}`, temperature 0, and the
+same seed. Both base and adapter passed:
+
+| Case | Required result | Base | Adapter |
+|---|---|---|---|
+| Factual | `Tokyo` | PASS | PASS |
+| Arithmetic | `323` | PASS | PASS |
+| Python expression | valid even-number sum expression | PASS | PASS |
+| Exact-format instruction | `red green blue` | PASS | PASS |
+
+The final shipped compose preset was then recreated from the published digest and its existing
+API harness passed for **both** the base model and the dynamically registered adapter: health,
+exact greedy chat, four non-streaming tool-call scenarios, and streaming tool-call deltas all
+reported `ALL PASS`.
+
+The updated retrieval harness also covered the shipped context range at three insertion depths:
+
+| Prompt target | Depths | Base | Adapter | Observed per-request range |
+|---:|---|---:|---:|---|
+| 8,000 | 0.1 / 0.5 / 0.9 | 3/3 | 3/3 | base 2–10 s; adapter 3–6 s |
+| 16,000 | 0.1 / 0.5 / 0.9 | 3/3 | 3/3 | base 4–7 s; adapter 5–9 s |
+| 30,000 | 0.1 / 0.5 / 0.9 | 3/3 | 3/3 | base 8–13 s; adapter 10–17 s |
+| **Total** | | **9/9** | **9/9** | all replies were the exact planted code |
+
+This is a regression gate, not evidence that the adapter universally improves quality. The
+adapter had measurable decode overhead in this workload, and the release makes no universal
+throughput claim.
+
+### Known log noise and rollback
+
+The base image repeatedly probes an optional FA2 extension whose ABI does not match its Torch
+build and logs an undefined-symbol error. The active backend is B12X sparse MLA; model load,
+graph capture, DCP4, prefix cache, MTP, and dynamic LoRA all served after those messages. First
+use of unseen long-prefill/LoRA shapes also emitted JIT-monitor latency warnings; the persistent
+compile cache prevents repeat compilation.
+
+The qualification host retained the stopped prior-production container
+`glm52-exl3-v26-5001` (`e08c3601feed…`) and local image
+`sha256:d55205e3ae3d81f00a2770dee91c2bf1662a5efe29c6c897be5ac3010ca75895`.
+Rollback is:
+
+```bash
+cd deploy
+./server.sh stop
+docker start glm52-exl3-v26-5001
+```
+
+The retained container must remain in place until the release burn-in is complete.
 
 ---
 
