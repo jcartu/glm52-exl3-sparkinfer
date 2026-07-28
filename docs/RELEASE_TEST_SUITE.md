@@ -176,7 +176,7 @@ defeats the target/draft isolation their independently captured CUDA graphs rely
 exactly one runtime. This is deliberately coarser than per-layer: the prefill arena is
 ~1054 MiB, so per-layer runtimes would need tens of GiB per rank across 75+ layers.
 
-**Runtime:** `verdictai/glm52-exl3-sparkinfer:v30-gg-v20-envreg-pcietopk-vllm0c79e41-sie603f74-cu132-sm120a` (`sha256:8753406f…`).
+**Runtime:** `verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a` (`sha256:8753406f…`).
 
 **Measured effect (the fix is observable in memory, not in the log -- the planner line
 uses `info_once` and is deduplicated):**
@@ -220,10 +220,10 @@ spread. This runtime shows no failures on either suite.
 ## 2026-07-25 update (2) — rebased onto the FINAL Gilded Gnosis v20 base
 
 The runtime is rebased onto the **finalized v20 common base**
-`voipmonitor/vllm:gilded-gnosis-v20-vllm0c79e41-sie603f74-fi801d57a-cu132-20260726`
+`voipmonitor/vllm:gilded-gnosis-v20-vllm0c79e41-sic3828fd-fi801d57a-cu132-20260727`
 (vLLM `5517197`, Sparkinfer `be0edca`, FlashInfer `801d57a`, CUTLASS 4.6.0).
 
-**New runtime:** `verdictai/glm52-exl3-sparkinfer:v30-gg-v20-envreg-pcietopk-vllm0c79e41-sie603f74-cu132-sm120a`
+**New runtime:** `verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a`
 (`sha256:da185fe8…`).
 
 **Why:** the finalized base consolidates the DCP prefill **auto-policy** and the
@@ -272,7 +272,7 @@ This checkpoint now ships the **MTP (layer 78) routed experts in EXL3 Trellis tr
 layer-78 file drops from 19.9 GB to 4.24 GB (−15.66 GB), freeing ~3.9 GiB/rank.
 
 **Requires the updated runtime:**
-`verdictai/glm52-exl3-sparkinfer:v30-gg-v20-envreg-pcietopk-vllm0c79e41-sie603f74-cu132-sm120a`
+`verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a`
 (`sha256:9b1befc1…`) **plus `VLLM_EXL3_TRELLIS_MIN_M=1`** (the compose / server.sh
 default in this repo). The prior v20 image cannot load a tr3 MTP layer. The two
 loader fixes are in vLLM PR #139 (local-inference-lab/vllm#139); no Sparkinfer
@@ -311,7 +311,7 @@ BF16 weights alone would need 16x 96 GB cards. This fits on 4 with room for the 
 ## Image
 
 ```text
-verdictai/glm52-exl3-sparkinfer:v30-gg-v20-envreg-pcietopk-vllm0c79e41-sie603f74-cu132-sm120a@sha256:f13f2f3854d40f56edc106071b6305f83c70389427cc527f42a6e99837e72d93
+verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a@sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff
 ```
 
 This is the current runtime. The per-benchmark sections further down were
@@ -1749,7 +1749,7 @@ chmod +x server.sh && ./server.sh start
 ```yaml
 services:
   glm52:
-    image: ${IMAGE:-verdictai/glm52-exl3-sparkinfer:v30-gg-v20-envreg-pcietopk-vllm0c79e41-sie603f74-cu132-sm120a@sha256:f13f2f3854d40f56edc106071b6305f83c70389427cc527f42a6e99837e72d93}
+    image: ${IMAGE:-verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a@sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff}
     container_name: glm52-exl3-sparkinfer
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
@@ -1903,7 +1903,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-export IMAGE="${IMAGE:-verdictai/glm52-exl3-sparkinfer:v30-gg-v20-envreg-pcietopk-vllm0c79e41-sie603f74-cu132-sm120a@sha256:f13f2f3854d40f56edc106071b6305f83c70389427cc527f42a6e99837e72d93}"
+export IMAGE="${IMAGE:-verdictai/glm52-exl3-sparkinfer:v31-gg-v20-sic3828fd-vllm0c79e41-cu132-sm120a@sha256:0433ae94665b769b78dd301f952d907508a3ba80bce47a1630ec20ade8812dff}"
 export MODEL_DIR="${MODEL_DIR:-$SCRIPT_DIR}"
 export CACHE_DIR="${CACHE_DIR:-$HOME/.cache/glm52-exl3-sparkinfer}"
 export PORT="${PORT:-8000}"
@@ -2115,3 +2115,19 @@ overlap with the EXL3/MoE lane (only +1 line outside its new files), and the vLL
 algorithm is not yet in this image's pinned base. Gates on the pinned v30: boot with
 VLLM_EXL3_TRELLIS_MIN_M unset PASS, 0 capture-window errors, warnings 15->8 confirmed,
 greedy inference PASS, tool-calls 4/4.
+
+
+## v31 (2026-07-27): unified v20 base refresh (SparkInfer c3828fd)
+
+Base bump only on the SparkInfer axis (vLLM pin unchanged at 0c79e41, so the 13-file vLLM
+overlay is byte-identical to v30). Wheel rebuilt from PR#49 (11 commits) on the new
+integration pin c3828fd and verified a strict superset of the base's canonical SparkInfer
+(168/168 source files present). Gates on the pinned digest: boot with
+VLLM_EXL3_TRELLIS_MIN_M unset PASS, warnings 8, 0 capture errors, inference PASS,
+tool-calls 4/4, KV 963,840.
+
+Correction note for v30: its wheel was built from SparkInfer master rather than the base's
+integration pin, so the pip install replaced the base's canonical SparkInfer with a tree
+missing the integration-only PCIe calibration commits. No effect on the published serving
+configs (they pin DCP controls explicitly, and calibration only engages on 'auto'), but
+helper/auto-calibration users should prefer v31.
