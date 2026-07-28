@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   publish:
-    if: github.event.head_commit.message == 'ci(release): publish qualified OCI image'
+    if: "${{ github.event.head_commit.message == 'ci(release): publish qualified OCI image' }}"
     runs-on: exl3-lora-publisher
     timeout-minutes: 60
     env:
